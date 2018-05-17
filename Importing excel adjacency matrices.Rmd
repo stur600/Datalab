@@ -1,0 +1,35 @@
+---
+title: "Importing excel adjacency matrices"
+output: html_notebook
+---
+
+This notebook will import a collection of matrices from an excel spreadsheet with multiple tabs.
+It will then make a network from these matrices.
+
+XLConnect allows us to interact with excel spreadsheets
+```{R}
+library(XLConnect)
+
+```
+
+```{R}
+wb <- loadWorkbook("G:/My Drive/StevenTurnbull_PhD/test_data.xlsx")
+n <- c(1:17)
+Years <- c(2000:2016)
+Years <- paste0("Year",Years)
+
+for(i in n){
+    df <- readWorksheet(wb, sheet=i)
+    
+    matrix.please<-function(x) {
+    m<-as.matrix(x[,-1])
+    rownames(m)<-x[,1]
+    m
+                               }
+    
+    M <- matrix.please(df)
+           assign(Years[i], M)
+}
+
+
+```

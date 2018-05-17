@@ -1,0 +1,242 @@
+---
+title: "Analysis_SchoolDecileGender_TertiaryDiscipline_matrix_rr3_Checked"
+output: html_notebook
+---
+
+This notebook will import a collection of matrices from an excel spreadsheet with multiple tabs.
+It will then make a network from these matrices.
+
+Disclaimer for output produced from the Integrated
+Data Infrastructure
+Phase 2 output produced from the Integrated Data Infrastructure (IDI) must include the
+following disclaimer. The first four paragraphs must always be used:
+The results in this [report, paper] are not official statistics They have been created for
+research purposes from the Integrated Data Infrastructure (IDI), managed by Statistics
+New Zealand.
+The opinions, findings, recommendations, and conclusions expressed in this [report,
+paper etc] are those of the author(s), not Statistics NZ, [Department X, or Organisation
+Y].
+Access to the anonymised data used in this study was provided by Statistics NZ under
+the security and confidentiality provisions of the Statistics Act 1975. Only people
+authorised by the Statistics Act 1975 are allowed to see data about a particular person,
+household, business, or organisation, and the results in this [report, paper] have been
+confidentialised to protect these groups from identification and to keep their data safe.
+Careful consideration has been given to the privacy, security, and confidentiality issues
+associated with using administrative and survey data in the IDI. Further detail can be
+found in the Privacy impact assessment for the Integrated Data Infrastructure available
+from www.stats.govt.nz.
+
+
+XLConnect allows us to interact with excel spreadsheets
+```{R}
+library(XLConnect)
+library(igraph)
+library(stringr)
+library(dplyr)
+library(RColorBrewer)
+library(reshape2)
+library(ggplot2)
+library(viridis)
+# Sys.setenv("plotly_username"="stur600")
+# Sys.setenv("plotly_api_key"="d7z5ufXNnbXQwZt5GPg1")
+```
+
+This one produces networks and heatmaps for highschools with gender composition info and decile info. Excludes school that do not have single-sex/co-ed info.
+```{R}
+Get_Networks <- function(file, Norm = "RAW"){
+  wb <- loadWorkbook(file)
+  n <- c(1:17)
+  Years <- c(2000:2016)
+  Years <- paste0("SchoolDecileGender_TertiaryDiscipline_Year",Years)
+  
+  for(i in n){
+      df <- readWorksheet(wb, sheet=i)
+      
+      matrix.please<-function(x) {
+      m<-as.matrix(x[,-1])
+      rownames(m)<-x[,1]
+      m
+                                 }
+      
+      M <- matrix.please(df)
+      M[M == "S"] <- 0
+      M[is.na(M)] <- 0
+      class(M) <- "numeric"
+      
+      #Define function "Get_RCP", which takes a matrix and works out the RCP value for each cell.
+      get_RCP <- function(x){
+                rNames <- rownames(x)
+                cNames <- colnames(x)
+                RCP <- matrix(nrow=nrow(x), ncol = ncol(x))
+                rownames(RCP) <- rNames
+                colnames(RCP) <- cNames
+  
+                for(i in 1:nrow(x)){
+                  for(j in 1:ncol(x)){
+                       
+                      xij <- x[i,j]
+                      xj <- colSums(x, na.rm = TRUE)[j]
+                      xi <- rowSums(x, na.rm = TRUE)[i]
+                      xsum <- sum(x, na.rm = TRUE)
+            
+                      RCP[i,j] <- (xij/xj)/(xi/xsum)
+                          
+                                      }
+                                 }
+                return(RCP) }
+      
+      if(Norm == "RCP"){
+                        M <- get_RCP(M)
+                      }
+  
+  
+      assign(Years[i], M)
+      
+      #Make Network
+      edgelist<- melt(M)
+      nodelist<- data.frame(node = c(levels(edgelist$Var1), levels(edgelist$Var2)))
+      nodelist <- nodelist %>%
+        mutate(type = ifelse(str_detect(node, "^43.*|^NA.*"), TRUE,FALSE))
+      
+      g<- graph_from_data_frame(edgelist, vertices = nodelist, directed = FALSE)
+      
+      #Filter out links with RCP values below 1. Only interested in links between high schools and tertiary instritutions that happen relatively more
+      E(g)$weight <- ifelse(E(g)$value>1,E(g)$value,NA)
+      
+      
+      
+      
+      LayOut <- layout.circle(g)
+      
+      radian.rescale <- function(x, start=0, direction=1) {
+        c.rotate <- function(x) (x + start) %% (2 * pi) * direction
+        c.rotate(scales::rescale(x, c(0, 2 * pi), range(x)))
+      }
+      lab.locs <- radian.rescale(x=1:n, direction=-1, start=0)
+      
+      #save as pdf
+      pdf(paste0("G:/My Drive/StevenTurnbull_PhD/Datalab/20180515_matrices/Analysis/Networks/",Years[i],"_",Norm,"_Network.pdf"))
+      #Make plot
+          plot(g
+           ,edge.width=E(g)$weight
+           ,vertex.shape=ifelse(V(g)$type,"circle","square")
+           ,vertex.shape="none"
+           ,vertex.color=ifelse(V(g)$type, "tomato","gold")
+           ,vertex.label.color=ifelse(V(g)$type, "tomato","gold")
+           ,vertex.label.cex=0.75 
+           ,vertex.label.family="Helvetica"
+           ,vertex.label.font=2
+           ,layout = LayOut
+           ,vertex.label.degree=lab.locs
+      )
+  
+      #Make heat map.
+      #First put data into adjacency matrix
+      # netm <- get.adjacency(g, attr="weight", sparse=F)
+      # #Sort col and row names
+      # rownames(netm) <- V(g)$name
+      # colnames(netm) <- V(g)$name
+      # 
+      #Use plotly to make nice heatmap. Upload interactive version to plotly and save a png
+      # library(plotly)
+      # p <- plot_ly(z = netm[(1+length(V(g)[V(g)$type])):ncol(netm),1:length(V(g)[V(g)$type])],
+      #              type = "heatmap",
+      #              x = V(g)$name[V(g)$type == TRUE],
+      #              y = V(g)$name[V(g)$type == FALSE],
+      #              xaxis = list(tickangle=15, title = "High School", titlefont=list(size=30)),
+      #              yaxis = list(title = "Tertiary Discipline", titlefont=list(size=30))
+      #              
+      #              ) %>% layout(margin = list(b=120, l=300))
+      # #save
+      # plotly_IMAGE(p, format = "png", scale = 2,
+      #              out_file = paste0("G:/My Drive/StevenTurnbull_PhD/Datalab/20180515_matrices/Analysis/Heatmaps/",Years[i],"_",Norm,"_Heatmap.png"))
+      # 
+      # api_create(p, filename=paste0(Years[i],"_Heatmap.png"))
+      
+      #Make heatmap using ggplot
+      edgelist$value[str_detect(edgelist$value, "NaN")] <- NA
+      edgelist$value[edgelist$value == 0] <- NA
+      
+      HeatMap <- ggplot(data = edgelist, aes(x=Var1, y=Var2, fill=value)) + 
+            theme_bw() +
+            geom_raster() +
+            scale_x_discrete(drop = FALSE) +
+            scale_y_discrete(drop = FALSE) +
+            scale_fill_viridis(na.value = "white") +
+            labs(x = "High School", y = "Tertiary Discipline") +
+            theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1,size=8),
+                  axis.text.y = element_text(size = 8))
+      
+      ggsave(plot = HeatMap, file = paste0("G:/My Drive/StevenTurnbull_PhD/Datalab/20180515_matrices/Analysis/Heatmaps/",Years[i],"_",Norm,"_Heatmap.pdf"))
+      
+      print(Years[i])
+      
+  }
+}
+```
+
+```{R}
+Get_Networks(file = "G:/My Drive/StevenTurnbull_PhD/Datalab/20180515_matrices/SchoolDecileGender_TertiaryDiscipline_matrix_rr3_Checked_ExcludeNA.xlsx", Norm = "raw")
+
+
+```
+Experimenting with igraph
+```{R}
+
+edgelist<- melt(SchoolDecileGender_TertiaryDiscipline_Year2015)
+nodelist<- data.frame(node = c(levels(edgelist$Var1), levels(edgelist$Var2)))
+nodelist <- nodelist %>%
+  mutate(type = ifelse(str_detect(node, "^43.*|^NA.*"), TRUE,FALSE))
+
+g<- graph_from_data_frame(edgelist, vertices = nodelist, directed = FALSE)
+
+#Filter out links with RCP values below 1. Only interested in links between high schools and tertiary instritutions that happen relatively more
+E(g)$weight <- ifelse(E(g)$value>1,E(g)$value,NA)
+
+
+
+
+LayOut <- la <- layout.circle(g)
+
+radian.rescale <- function(x, start=0, direction=1) {
+  c.rotate <- function(x) (x + start) %% (2 * pi) * direction
+  c.rotate(scales::rescale(x, c(0, 2 * pi), range(x)))
+}
+lab.locs <- radian.rescale(x=1:n, direction=-1, start=0)
+
+plot(g
+     ,edge.width=E(g)$weight
+     ,vertex.shape=ifelse(V(g)$type,"circle","square")
+     ,vertex.shape="none"
+     ,vertex.color=ifelse(V(g)$type, "tomato","gold")
+     ,vertex.label.color=ifelse(V(g)$type, "tomato","gold")
+     ,vertex.label.cex=0.75 
+     ,vertex.label.family="Helvetica"
+     ,vertex.label.font=2
+     ,layout = LayOut
+     ,vertex.label.degree=lab.locs
+)
+
+
+```
+
+```{R}
+#Make heat map.
+library(ggplot2)
+library(viridis)
+
+edgelist$value[str_detect(edgelist$value, "NaN")] <- NA
+edgelist$value[edgelist$value == 0] <- NA
+
+ggplot(data = edgelist, aes(x=Var1, y=Var2, fill=value)) + 
+      theme_bw() +
+      geom_tile() 
+# +
+#       scale_x_discrete(drop = FALSE) +
+#       scale_y_discrete(drop = FALSE) +
+#       scale_fill_viridis(na.value = "white") +
+#       labs(x = "High School", y = "Tertiary Discipline") +
+#       theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1,size=8),
+#             axis.text.y = element_text(size = 8))
+
+```

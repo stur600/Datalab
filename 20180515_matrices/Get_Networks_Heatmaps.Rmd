@@ -26,7 +26,8 @@ associated with using administrative and survey data in the IDI. Further detail 
 found in the Privacy impact assessment for the Integrated Data Infrastructure available
 from www.stats.govt.nz.
 
-
+```{R}
+```
 XLConnect allows us to interact with excel spreadsheets
 ```{R}
 library(XLConnect)
@@ -41,226 +42,456 @@ library(viridis)
 # Sys.setenv("plotly_api_key"="d7z5ufXNnbXQwZt5GPg1")
 ```
 
+Copy in multiplot function
+```{R}
+# Multiple plot function
+#
+# ggplot objects can be passed in ..., or to plotlist (as a list of ggplot objects)
+# - cols:   Number of columns in layout
+# - layout: A matrix specifying the layout. If present, 'cols' is ignored.
+#
+# If the layout is something like matrix(c(1,2,3,3), nrow=2, byrow=TRUE),
+# then plot 1 will go in the upper left, 2 will go in the upper right, and
+# 3 will go all the way across the bottom.
+#
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                    ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+
+ if (numPlots==1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+```
+
+
 This produces networks and heatmaps for highschools with gender composition info and decile info. Excludes school that do not have single-sex/co-ed info.
 ```{R}
-Get_Networks <- function(File, group = "ALL", Norm = "RAW"){
+Get_Networks <- function(File, group = "ALL", Norm = "RAW", cluster = "CEB"){
+  #store any plots here
+  myplots <- list()
+  LayOut <- NA
+  #load data
   wb <- loadWorkbook(File)
   n <- c(1:17)
-  Years <- c(2000:2016)
+  Yearsnum <- c(2000:2016)
   #Extract info from file name - we'll use this when saving our files.
-  strr<- strsplit(File, "/")[[1]][[6]] #split by / in directory address
-  keystring <- strsplit(strr, "_matrix")[[1]][[1]] #extract key string info
-  Years <- paste0(keystring,Years)
-  #Big_M <- matrix()
-  for(i in n){
-      df <- readWorksheet(wb, sheet=i)
+  #strr<- strsplit(File, "/")[[1]][[8]] #split by / in directory address
+  keystring <- strsplit(File, "_matrix")[[1]][[1]] #extract key string info
+  Years <- paste0(keystring,Yearsnum)
+  
+      ########################################################################################################################
+      #################################       Restructure Data into Matrices        ##########################################
+      ########################################################################################################################  
       
-      matrix.please<-function(x) {
-      m<-as.matrix(x[,-1])
-      rownames(m)<-x[,1]
-      m
-                                 }
+      df_Big <- data.frame()
+      for(i in n){
+          df <- readWorksheet(wb, sheet=i)
+          
+          df_Big <- merge(df_Big, df, all = TRUE)
+          
+      }  
+          cNames <- c(names(df_Big[-1]))
+          rNames <- unique(df_Big$Col1)
       
-      M <- matrix.please(df)
-      M[M == "S"] <- 0
-      M[is.na(M)] <- 0
-      class(M) <- "numeric"
-      #Big_M <- Big_M + M
+          Big_Matrix <-matrix(0, nrow = length(rNames), ncol = length(cNames))
+      
+      
+          colnames(Big_Matrix) <- sort(cNames)
+          rownames(Big_Matrix)<- sort(rNames)
+          
+      for(i in n){
+          df <- readWorksheet(wb, sheet=i)
+          
+          matrix.please<-function(x) {
+          m<-as.matrix(x[,-1])
+          rownames(m)<-x[,1]
+          m
+                                     }
+          
+          M <- matrix.please(df)
+          
+          #Match values in M to cells in Big_Matrix
+          rowmatch <- match(rownames(M), rownames(Big_Matrix))
+          colmatch <- match(colnames(M), colnames(Big_Matrix))
+          
+          Big_Matrix[rowmatch,colmatch] <- M
+          
+          #M now has the structure of Big_Matrix
+          M <- Big_Matrix
+          M[M == "S"] <- 0
+          M[is.na(M)] <- 0
+          class(M) <- "numeric"
+
+      ########################################################################################################################
+      #################################       Define Normalising functions        ############################################
+      ########################################################################################################################      
+      
       #Define function "Get_RCP", which takes a matrix and works out the RCP value for each cell.
+      
       get_RCP <- function(x){
                 rNames <- rownames(x)
                 cNames <- colnames(x)
                 RCP <- matrix(nrow=nrow(x), ncol = ncol(x))
                 rownames(RCP) <- rNames
                 colnames(RCP) <- cNames
-  
+
                 for(i in 1:nrow(x)){
                   for(j in 1:ncol(x)){
-                       
+
                       xij <- x[i,j]
                       xj <- colSums(x, na.rm = TRUE)[j]
                       xi <- rowSums(x, na.rm = TRUE)[i]
                       xsum <- sum(x, na.rm = TRUE)
-            
+
                       RCP[i,j] <- (xij/xj)/(xi/xsum)
-                          
+
                                       }
                                  }
                 return(RCP) }
-      
+
+      #Define function "Get_RCP_N", which takes a matrix and works out the RCP value for each cell, but only when more than one category is represented on a row.
+      get_RCP_N <- function(x){
+              rNames <- rownames(x)
+                cNames <- colnames(x)
+                RCP_N <- matrix(nrow=nrow(x), ncol = ncol(x))
+                rownames(RCP_N) <- rNames
+                colnames(RCP_N) <- cNames
+                x[x==0]<- NA
+                for(i in 1:nrow(x)){
+                  for(j in 1:ncol(x)){
+                      NaCount <- sum(is.na(x[,j]))/nrow(x)*100
+                      
+                      xij <- ifelse(NaCount>=70,NA, x[i,j]) #if missing data for column is over 70%, don't calculate a value
+                      xj <- colSums(x, na.rm = TRUE)[j]
+                      xi <- rowSums(x, na.rm = TRUE)[i]
+                      xsum <- sum(x, na.rm = TRUE)
+          
+                      #normalise the RCP by excluding RCP value when all students at a tertiary discipline come from same school.
+                      #This tends to be low count of students
+                      RCP_N[i,j] <- ifelse(xij==xj,NA,((xij/xj)/(xi/xsum)))
+                      }}
+                return(RCP_N)}
+
+      #Define function "get_ROW_prop", which takes a matrix and works out the proportion of the row total for each cell.
+      get_ROW_prop <- function(x){
+                rNames <- rownames(x)
+                cNames <- colnames(x)
+                ROW <- matrix(nrow=nrow(x), ncol = ncol(x))
+                rownames(ROW) <- rNames
+                colnames(ROW) <- cNames
+
+                for(i in 1:nrow(x)){
+                  for(j in 1:ncol(x)){
+
+                      xij <- x[i,j]
+                      xi <- rowSums(x, na.rm = TRUE)[i]
+
+
+                      ROW[i,j] <- (xij/xi)
+
+                                      }
+                                 }
+                return(ROW)
+      }
+
+      #Define function "get_COL_prop", which takes a matrix and works out the proportion of the column total for each cell.
+      get_COL_prop <- function(x){
+                rNames <- rownames(x)
+                cNames <- colnames(x)
+                COL <- matrix(nrow=nrow(x), ncol = ncol(x))
+                rownames(COL) <- rNames
+                colnames(COL) <- cNames
+
+                for(i in 1:nrow(x)){
+                  for(j in 1:ncol(x)){
+
+                      xij <- x[i,j]
+                      xj <- colSums(x, na.rm = TRUE)[j]
+
+
+                      COL[i,j] <- (xij/xj)
+
+                                      }
+                                 }
+                return(COL)
+                }
+
       if(Norm == "RCP"){
                         M <- get_RCP(M)
+      }
+
+      if(Norm == "RCP_N"){
+                        M <- get_RCP_N(M)
                       }
-  
-  
+
+      if(Norm == "ROW"){
+                        M <- get_ROW_prop(M)
+      }
+
+      if(Norm == "COL"){
+                        M <- get_COL_prop(M)
+      }
+      
+      if(Norm == "RAW"){
+                        M<- (M - quantile(M, .50)) #Median centre raw values
+                        M[M<0] <- 0  
+       }
+
       assign(Years[i], M)
       
-      #Make Network
-      edgelist<- melt(M)
-      nodelist<- data.frame(node = c(levels(edgelist$Var1), levels(edgelist$Var2)))
-      nodelist <- nodelist %>%
-        mutate(type = ifelse(str_detect(node, "^43.*|^NA.*"), TRUE,FALSE))
       
+      
+      #################################################################################################################################
+      ######################################     Make Networks and Heat Maps     ######################################################
+      #################################################################################################################################
+
+      plotnumber = 1
+
+      #Restructure data into edgelist for networks
+      edgelist<- melt(M)
+      edgelist$value[str_detect(edgelist$value, "NaN")] <- NA
+      edgelist$value[edgelist$value == 0] <- NA #make 0 edges NA
+      edgelist <- edgelist %>% arrange(Var1) #Order by nodes
+
+      #Clean edgelist (use nicer strings for node labels)
+      edgelist$Var1 <- gsub("Single sex ", "", edgelist$Var1)
+      edgelist$Var1 <- gsub("\\(", "", edgelist$Var1)
+      edgelist$Var1 <- gsub("\\)", "", edgelist$Var1)
+      edgelist$Var1 <- gsub("430", "D",edgelist$Var1)
+      edgelist$Var1 <- gsub("Primary co-ed, secondary girls", "Secondary girls",edgelist$Var1)
+      edgelist$Var1 <- gsub("Senior co-ed, junior boys", "Juniorboys_SeniorCoed",edgelist$Var1)
+      edgelist$Var1 <- gsub("_", "\n",edgelist$Var1)
+      edgelist$Var2 <- gsub("_", "\n",edgelist$Var2)
+      edgelist$Var2 <- gsub("Private.Training.Establishment", "Private",edgelist$Var2)
+      edgelist$Var2 <- gsub("Other.Tertiary.Education.Provider", "OtherProvider",edgelist$Var2)
+
+      #make high school variable (Var1) a factor
+      edgelist$Var1 <- as.factor(edgelist$Var1)
+      #make tertiary variable (Var2) a factor
+      edgelist$Var2 <- as.factor(edgelist$Var2)
+      #Make value numeric
+      edgelist$value <- as.numeric(edgelist$value)
+
+      #For RCP and RCP_N normalisation, exclude edges with disadvantage (include only values above 1)
+      if(Norm == "RCP"){
+      edgelist <- edgelist %>% filter(value >1) %>% droplevels()
+      }
+      if(Norm == "RCP_N"){
+      edgelist <- edgelist %>% filter(value >1) %>% droplevels()
+      }
+
+      #Get nodelist from edgelist
+      nodelist<- data.frame(node = c(levels(edgelist$Var1), levels(edgelist$Var2)))
+      #Only include nodes that have decile info
+      nodelist <- nodelist %>%
+        mutate(type = ifelse(str_detect(node, "^D.*"), TRUE,FALSE))
+
+
+
+      #functions to help tidy graph
+      wrap_strings <- function(vector_of_strings,width){
+        as.character(sapply(vector_of_strings, FUN=function(x){
+                              paste(strwrap(x, width=width), collapse="\n")
+                              }))
+                                                        }
+
+      ############################################# NETWORKS ######################################################
+      #Make graph
       g<- graph_from_data_frame(edgelist, vertices = nodelist, directed = FALSE)
       
-      #Filter out links with RCP values below 1. Only interested in links between high schools and tertiary instritutions that happen relatively more
-      E(g)$weight <- ifelse(E(g)$value>1,E(g)$value,NA)
-      
-      
-      
-      
-      LayOut <- layout.circle(g)
-      
-      radian.rescale <- function(x, start=0, direction=1) {
-        c.rotate <- function(x) (x + start) %% (2 * pi) * direction
-        c.rotate(scales::rescale(x, c(0, 2 * pi), range(x)))
-      }
-      lab.locs <- radian.rescale(x=1:n, direction=-1, start=0)
-      
-      #save as pdf
-      pdf(paste0("G:/My Drive/StevenTurnbull_PhD/Datalab/20180515_matrices/Analysis/Networks/",group, "_", Years[i],"_",Norm,"_Network.pdf"))
-      #Make plot
-          plot(g
+      #adjust weights based on normalisation
+      if(Norm == "RAW"){E(g)$weight <- E(g)$value**0.2}else{E(g)$weight <- E(g)$value}
+      #Wrap labels
+      V(g)$label = wrap_strings(V(g)$label, 12)
+
+      if(cluster == "CEB"){
+      clust <- cluster_edge_betweenness(g)}
+
+      #INFOMAP doesn't seem to produce any communities as is
+      if(cluster == "INFOMAP"){
+      clust <- cluster_infomap(g)}
+
+
+      if(cluster == "LOUVAIN"){
+      clust <- cluster_louvain(g)}
+
+      V(g)$community <- clust$membership
+
+      #Get nice edge colors
+      edgeColor_df <- data.frame(Var1 = V(g)$name,Colour=V(g)$community)
+      edgelist_colours <- left_join(edgelist, edgeColor_df, by = "Var1")
+      LayOut <- layout_nicely(g)
+
+      #Get nice colours for network communities
+      nice_vcols <- RColorBrewer::brewer.pal(12, "Set3")
+      V(g)$color <- nice_vcols[V(g)$community]
+      E(g)$color <- adjustcolor(nice_vcols[edgelist_colours$Colour], alpha.f = 0.4)
+      #get bipartite projection
+      g.bp <- bipartite.projection(g)
+
+      pdf(paste0("Analysis/Networks/",Norm,"/PDF/",group, "_", Years[i],"_",Norm,"_Network_", cluster,".pdf"), width=20, height=20)
+      par(mfrow=c(3,1))
+
+      #Plot 2mode network
+      #Plot network
+      plot(g
            ,edge.width=E(g)$weight
            ,vertex.shape=ifelse(V(g)$type,"circle","square")
-           ,vertex.shape="none"
-           ,vertex.color=ifelse(V(g)$type, "tomato","gold")
-           ,vertex.label.color=ifelse(V(g)$type, "tomato","gold")
-           ,vertex.label.cex=0.75 
+           ,vertex.label.cex=0.6
            ,vertex.label.family="Helvetica"
-           ,vertex.label.font=2
+           #,vertex.label.font=2
+           , vertex.label.color="black"
            ,layout = LayOut
-           ,vertex.label.degree=lab.locs
-      )
+           ,col=nice_vcols
+           ,mark.border="black"
+           ,main=paste0("Year ",Yearsnum[i], " Two-Mode Network")
+           #,vertex.label.degree=lab.locs
+           # ,rescale = FALSE
+           # , ylim=c(1,4)
+           # ,xlim=c(-17,24)
+           #, asp = 0.4
+           )
+
+      plot(g.bp$proj1
+           , vertex.label.color="black"
+           #, vertex.label.dist=1
+           #, vertex.color =nice_vcols[V(g)$community]
+           ,vertex.label.family="Helvetica"
+           ,vertex.label.cex=0.6
+           , vertex.shape="square"
+           ,main=paste0("Year ",Yearsnum[i], " Tertiary Projection")
+           )
+      #
+      plot(g.bp$proj2
+           , vertex.label.color="black"
+           #, vertex.label.dist=1
+           ,vertex.label.family="Helvetica"
+           ,vertex.label.cex=0.6
+           ,vertex.color =nice_vcols[V(g)$community]
+           , vertex.shape="circle"
+           ,main=paste0("Year ",Yearsnum[i], " High School Projection")
+           )
+
       dev.off()
-      #Make heat map.
-      #First put data into adjacency matrix
-      # netm <- get.adjacency(g, attr="weight", sparse=F)
-      # #Sort col and row names
-      # rownames(netm) <- V(g)$name
-      # colnames(netm) <- V(g)$name
-      # 
-      #Use plotly to make nice heatmap. Upload interactive version to plotly and save a png
-      # library(plotly)
-      # p <- plot_ly(z = netm[(1+length(V(g)[V(g)$type])):ncol(netm),1:length(V(g)[V(g)$type])],
-      #              type = "heatmap",
-      #              x = V(g)$name[V(g)$type == TRUE],
-      #              y = V(g)$name[V(g)$type == FALSE],
-      #              xaxis = list(tickangle=15, title = "High School", titlefont=list(size=30)),
-      #              yaxis = list(title = "Tertiary Discipline", titlefont=list(size=30))
-      #              
-      #              ) %>% layout(margin = list(b=120, l=300))
-      # #save
-      # plotly_IMAGE(p, format = "png", scale = 2,
-      #              out_file = paste0("G:/My Drive/StevenTurnbull_PhD/Datalab/20180515_matrices/Analysis/Heatmaps/",group, "_", Years[i],"_",Norm,"_Heatmap.png"))
-      # 
-      # api_create(p, filename=paste0(Years[i],"_Heatmap.png"))
-      
+      # ############################################# HEATMAPS ######################################################
+      #
+      # #Make heat map using plotly.
+      # #First put data into adjacency matrix
+      # # netm <- get.adjacency(g, attr="weight", sparse=F)
+      # # #Sort col and row names
+      # # rownames(netm) <- V(g)$name
+      # # colnames(netm) <- V(g)$name
+      #
+      # #Use plotly to make nice heatmap. Upload interactive version to plotly and save a png
+      # # library(plotly)
+      # # p <- plot_ly(z = netm[(1+length(V(g)[V(g)$type])):ncol(netm),1:length(V(g)[V(g)$type])],
+      # #              type = "heatmap",
+      # #              x = V(g)$name[V(g)$type == TRUE],
+      # #              y = V(g)$name[V(g)$type == FALSE],
+      # #              xaxis = list(tickangle=15, title = "High School", titlefont=list(size=30)),
+      # #              yaxis = list(title = "Tertiary Discipline", titlefont=list(size=30))
+      # #
+      # #              ) %>% layout(margin = list(b=120, l=300))
+      # # #save
+      # # plotly_IMAGE(p, format = "png", scale = 2,
+      # #              out_file = paste0("C:/Users/stur600/Dropbox (Complex systems)/PhD/Datalab/20180515_matrices/Analysis/Heatmaps/",group, "_", Years[i],"_",Norm,"_Heatmap.png"))
+      # #
+      # # api_create(p, filename=paste0(Years[i],"_Heatmap.png"))
+      #
       #Make heatmap using ggplot
-      edgelist$value[str_detect(edgelist$value, "NaN")] <- NA
-      edgelist$value[edgelist$value == 0] <- NA
-      
-      HeatMap <- ggplot(data = edgelist, aes(x=Var1, y=Var2, fill=value)) + 
+
+      HeatMap <- ggplot(data = edgelist, aes(x=Var1, y=Var2, fill=value)) +
             theme_bw() +
             geom_raster() +
             scale_x_discrete(drop = FALSE) +
             scale_y_discrete(drop = FALSE) +
             scale_fill_viridis(na.value = "white") +
             labs(x = "High School", y = "Tertiary Discipline") +
+            ggtitle(paste0(Years[i]), subtitle = paste0(group, "_",Norm, "_Year_", Yearsnum[i])) +
             theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1,size=8),
-                  axis.text.y = element_text(size = 8))
-      
-      ggsave(plot = HeatMap, file = paste0("G:/My Drive/StevenTurnbull_PhD/Datalab/20180515_matrices/Analysis/Heatmaps/",group, "_",Years[i],"_",Norm,"_Heatmap.pdf"))
-      
-      print(paste0(Years[i], "_", Norm))
-      
+                  axis.text.y = element_text(size = 8),
+                  plot.title = element_text(size = 12))
+
+      ggsave(plot = HeatMap, device = "pdf", file = paste0("Analysis/Heatmaps/",Norm,"/PDF/",group, "_",Years[i],"_",Norm,"_Heatmap.pdf"))
+      ggsave(plot = HeatMap, device = "png",file = paste0("Analysis/Heatmaps/",Norm,"/PNG/",group, "_",Years[i],"_",Norm,"_Heatmap.png"))
+
+      myplots[[plotnumber]] <- HeatMap
+      plotnumber = plotnumber + 1
+
+      }
+          
+print(paste0(Years[i], "_", Norm, "_", cluster))}
+```
+
+
+Get Networks for SchoolDecileGender and SchoolDecile StudentGender (including and excluding Other as a discipline)
+```{R}
+FILES1 <- c("SchoolDecileGender_TertiaryDiscipline_matrix_rr3_Checked_ExcludeNA.xlsx",
+           "SchoolDecileStudentGender_TertiaryDiscipline_matrix_rr3_Checked_ExcludeNA.xlsx"
+           )
+for(file in FILES1){
+Get_Networks(File = file, Norm = "RAW", cluster = "CEB")
+Get_Networks(File = file, Norm = "RAW", cluster = "LOUVAIN")
+
+# Get_Networks(File = file, Norm = "ROW")
+# Get_Networks(File = file, Norm = "COL")
+# Get_Networks(File = file, Norm = "RCP_N",cluster = "CEB")
+# Get_Networks(File = file, Norm = "RCP_N", cluster = "LOUVAIN")
   }
+```
+
+```{R}
+FILES2 <- c("SchoolDecileGender_TertiaryDisciplineExcludeOther_matrix_rr3_Checked_ExcludeNA.xlsx",
+            "SchoolDecileStudentGender_TertiaryDisciplineExcludeOther_matrix_rr3_Checked_ExcludeNA.xlsx")
+for(file in FILES2){
+Get_Networks(File = file, Norm = "RAW", group = "ExcludeOther", cluster = "CEB")
+Get_Networks(File = file, Norm = "RAW", group = "ExcludeOther", cluster = "LOUVAIN")
+
+# Get_Networks(File = file, Norm = "ROW", group = "ExcludeOther")
+# Get_Networks(File = file, Norm = "COL", group = "ExcludeOther")
+# Get_Networks(File = file, Norm = "RCP_N", group = "ExcludeOther", cluster = "CEB")
+# Get_Networks(File = file, Norm = "RCP_N", group = "ExcludeOther", cluster = "LOUVAIN")
+
 }
 ```
 
-Get Networks for raw counts of SchoolDecileGender 
-```{R}
-Get_Networks(File = "G:/My Drive/StevenTurnbull_PhD/Datalab/20180515_matrices/SchoolDecileGender_TertiaryDiscipline_matrix_rr3_Checked_ExcludeNA.xlsx", Norm = "RAW")
 
-```
-Get Networks for raw counts of SchoolDecile StudentGender 
 ```{R}
-Get_Networks(File = "G:/My Drive/StevenTurnbull_PhD/Datalab/20180515_matrices/SchoolDecileStudentGender_TertiaryDiscipline_matrix_rr3_Checked_ExcludeNA.xlsx", Norm = "RAW")
+
 
 
 ```
 
-Get Networks for RCP counts of SchoolDecileGender 
-```{R}
-Get_Networks(File = "G:/My Drive/StevenTurnbull_PhD/Datalab/20180515_matrices/SchoolDecileGender_TertiaryDiscipline_matrix_rr3_Checked_ExcludeNA.xlsx", Norm = "RCP")
-
-
-```
-
-Get Networks for RCP of SchoolDecile StudentGender 
-```{R}
-Get_Networks(File = "G:/My Drive/StevenTurnbull_PhD/Datalab/20180515_matrices/SchoolDecileStudentGender_TertiaryDiscipline_matrix_rr3_Checked_ExcludeNA.xlsx", Norm = "RCP")
-
-
-```
-
-Experimenting with igraph
-```{R}
-
-edgelist<- melt(SchoolDecileGender_TertiaryDiscipline_Year2015)
-nodelist<- data.frame(node = c(levels(edgelist$Var1), levels(edgelist$Var2)))
-nodelist <- nodelist %>%
-  mutate(type = ifelse(str_detect(node, "^43.*|^NA.*"), TRUE,FALSE))
-
-g<- graph_from_data_frame(edgelist, vertices = nodelist, directed = FALSE)
-
-#Filter out links with RCP values below 1. Only interested in links between high schools and tertiary instritutions that happen relatively more
-E(g)$weight <- ifelse(E(g)$value>1,E(g)$value,NA)
 
 
 
 
-LayOut <- la <- layout.circle(g)
 
-radian.rescale <- function(x, start=0, direction=1) {
-  c.rotate <- function(x) (x + start) %% (2 * pi) * direction
-  c.rotate(scales::rescale(x, c(0, 2 * pi), range(x)))
-}
-lab.locs <- radian.rescale(x=1:n, direction=-1, start=0)
-
-plot(g
-     ,edge.width=E(g)$weight
-     ,vertex.shape=ifelse(V(g)$type,"circle","square")
-     ,vertex.shape="none"
-     ,vertex.color=ifelse(V(g)$type, "tomato","gold")
-     ,vertex.label.color=ifelse(V(g)$type, "tomato","gold")
-     ,vertex.label.cex=0.75 
-     ,vertex.label.family="Helvetica"
-     ,vertex.label.font=2
-     ,layout = LayOut
-     ,vertex.label.degree=lab.locs
-)
-
-
-```
-
-```{R}
-#Make heat map.
-library(ggplot2)
-library(viridis)
-
-edgelist$value[str_detect(edgelist$value, "NaN")] <- NA
-edgelist$value[edgelist$value == 0] <- NA
-
-ggplot(data = edgelist, aes(x=Var1, y=Var2, fill=value)) + 
-      theme_bw() +
-      geom_tile() 
-# +
-#       scale_x_discrete(drop = FALSE) +
-#       scale_y_discrete(drop = FALSE) +
-#       scale_fill_viridis(na.value = "white") +
-#       labs(x = "High School", y = "Tertiary Discipline") +
-#       theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1,size=8),
-#             axis.text.y = element_text(size = 8))
-
-```
